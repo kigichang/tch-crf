@@ -4,6 +4,13 @@ use candle_core::{DType, Error, IndexOp, Result, Tensor, D};
 use candle_nn::{Init, VarBuilder};
 
 #[derive(Debug)]
+pub enum Reduction {
+    Sum,
+    Meam,
+    TokenMean,
+}
+
+#[derive(Debug)]
 pub struct CRF {
     num_tags: usize,
     batch_first: bool,
@@ -212,12 +219,65 @@ impl CRF {
         score.log_sum_exp(1)
     }
 
-    fn viterbi_decode() -> Vec<Vec<isize>> {
+    fn viterbi_decode(&self, emissions: &Tensor, mask: &Tensor) -> Result<Vec<Vec<isize>>> {
         unimplemented!("viterbi_decode")
     }
 
-    fn decode(&self, emissions: &Tensor) -> Result<()> {
-        unimplemented!("decode")
+    pub fn decode(&self, emissions: &Tensor, mask: Option<&Tensor>) -> Result<Vec<Vec<isize>>> {
+        self.validate(emissions, None, mask)?;
+        let mask = if let Some(mask) = mask {
+            mask.clone()
+        } else {
+            Tensor::ones(emissions.dims2()?, DType::U8, emissions.device())?
+        };
+
+        let (emissions, mask) = if self.batch_first {
+            (emissions.transpose(0, 1)?, mask.transpose(0, 1)?)
+        } else {
+            (emissions.clone(), mask.clone())
+        };
+        self.viterbi_decode(&emissions, &mask)
+    }
+
+    pub fn forward(
+        &self,
+        emissions: &Tensor,
+        tags: &Tensor,
+        mask: Option<&Tensor>,
+        reduction: Option<Reduction>,
+    ) -> Result<Tensor> {
+        self.validate(emissions, Some(tags), mask)?;
+        let mask = if let Some(mask) = mask {
+            mask.clone()
+        } else {
+            Tensor::ones_like(tags)?.to_dtype(DType::U8)?
+        };
+
+        let (emissions, tags, mask) = if self.batch_first {
+            (
+                emissions.transpose(0, 1)?,
+                tags.transpose(0, 1)?,
+                mask.transpose(0, 1)?,
+            )
+        } else {
+            (emissions.clone(), tags.clone(), mask.clone())
+        };
+
+        let numerator = self.compute_score(&emissions, &tags, &mask)?;
+        let denominator = self.compute_normalizer(&emissions, &mask)?;
+
+        let llh = numerator.broadcast_sub(&denominator)?;
+
+        match reduction {
+            Some(Reduction::Sum) => llh.sum_all(),
+            Some(Reduction::Meam) => llh.mean_all(),
+            Some(Reduction::TokenMean) => {
+                let mask = mask.to_dtype(llh.dtype())?;
+                let z = mask.sum_all()?;
+                llh.sum_all()?.broadcast_div(&z)
+            }
+            None => Ok(llh),
+        }
     }
 }
 
@@ -319,6 +379,13 @@ mod tests {
         let a = Tensor::new(&[[1_u32], [1]], &Device::Cpu).unwrap();
         let z = a.broadcast_as((2, 5)).unwrap();
         println!("{:?}", z.to_vec2::<u32>().unwrap());
+    }
+
+    #[test]
+    fn test_sum() {
+        let a = Tensor::new(&[-6.8511, -6.5189], &Device::Cpu).unwrap();
+        let z = a.sum_all().unwrap();
+        println!("{:?}", z.to_scalar::<f64>().unwrap());
     }
 }
 

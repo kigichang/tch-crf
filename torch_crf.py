@@ -105,13 +105,19 @@ class CRF(nn.Module):
         # shape: (batch_size,)
         llh = numerator - denominator
 
+        print("reduction:", reduction)
+        print("llh:", llh)
         if reduction == 'none':
             return llh
         if reduction == 'sum':
+            print("llh.sum():", llh.sum())
             return llh.sum()
         if reduction == 'mean':
+            print("llh.mean():", llh.mean())
             return llh.mean()
         assert reduction == 'token_mean'
+        print("mask.float().sum():", mask.float().sum())
+        print("llh.sum()", llh.sum())
         return llh.sum() / mask.float().sum()
 
     def decode(self, emissions: torch.Tensor,
@@ -382,4 +388,4 @@ emissions = torch.randn(seq_length, batch_size, num_tags)
 tags = torch.tensor([
    [0, 1], [2, 4], [3, 1]
 ], dtype=torch.long)  # (seq_length, batch_size)
-print(model(emissions, tags))
+print(model(emissions, tags, reduction='token_mean'))
