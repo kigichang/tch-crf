@@ -120,7 +120,7 @@ impl CRF {
         assert_eq!(mask.shape(), tags.shape());
         assert!(all(&mask.i(0)?)?);
 
-        println!("tags: {:?}", tags.to_vec2::<u32>()?);
+        println!("tags: {:?}", tags.to_vec2::<i64>()?);
 
         let mask = mask.to_dtype(emissions.dtype())?;
 
@@ -176,7 +176,7 @@ impl CRF {
         println!("transitions: {:?}", self.transitions.to_vec2::<f32>()?);
         println!("ends: {:?}", self.end_transitions.to_vec1::<f32>()?);
         println!("emissions: {:?}", emissions.to_vec3::<f32>()?);
-        println!("mask: {:?}", mask.to_vec2::<u32>()?);
+        println!("mask: {:?}", mask.to_vec2::<u8>()?);
 
         let mut score = self.start_transitions.broadcast_add(&emissions.i(0)?)?;
         println!("score: {:?}", score.to_vec2::<f32>()?);
@@ -199,7 +199,7 @@ impl CRF {
             println!("next_score: {:?}", next_score.to_vec2::<f32>()?);
             println!(
                 "mask[i].unsqueeze(1): {:?}",
-                mask.i(i)?.unsqueeze(1)?.to_vec2::<u32>()
+                mask.i(i)?.unsqueeze(1)?.to_vec2::<u8>()
             );
             let z = mask.i(i)?.unsqueeze(1)?.broadcast_as(next_score.shape())?;
             score = z.where_cond(&next_score, &score)?;
@@ -210,6 +210,14 @@ impl CRF {
         println!("score: {:?}", score.to_vec2::<f32>()?);
         println!("result: {:?}", score.log_sum_exp(1)?.to_vec1::<f32>()?);
         score.log_sum_exp(1)
+    }
+
+    fn viterbi_decode() -> Vec<Vec<isize>> {
+        unimplemented!("viterbi_decode")
+    }
+
+    fn decode(&self, emissions: &Tensor) -> Result<()> {
+        unimplemented!("decode")
     }
 }
 
@@ -283,8 +291,8 @@ mod tests {
             ],
             &device,
         )?;
-        let tags = Tensor::new(&[[0_u32, 1], [2, 4], [3, 1]], &device)?;
-        let mask = Tensor::new(&[[1_u32, 1], [1, 1], [1, 1]], &device)?;
+        let tags = Tensor::new(&[[0_i64, 1], [2, 4], [3, 1]], &device)?;
+        let mask = Tensor::new(&[[1_u8, 1], [1, 1], [1, 1]], &device)?;
 
         Ok((m, emissions, tags, mask))
     }
