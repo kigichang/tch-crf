@@ -87,11 +87,23 @@ class CRF(nn.Module):
             `~torch.Tensor`: The log likelihood. This will have size ``(batch_size,)`` if
             reduction is ``none``, ``()`` otherwise.
         """
+
+
+        print("-------------------- forward:1 --------------------")
         self._validate(emissions, tags=tags, mask=mask)
         if reduction not in ('none', 'sum', 'mean', 'token_mean'):
             raise ValueError(f'invalid reduction: {reduction}')
         if mask is None:
             mask = torch.ones_like(tags, dtype=torch.uint8)
+
+        print("starts:", self.start_transitions)
+        print("transitions:", self.transitions)
+        print("ends:", self.end_transitions)
+        print("self.batch_first:", self.batch_first)
+        print("emissions:", emissions)
+        print("tags:", tags)
+        print("mask:", mask)
+        print("reduction:", reduction)
 
         if self.batch_first:
             emissions = emissions.transpose(0, 1)
@@ -103,9 +115,11 @@ class CRF(nn.Module):
         # shape: (batch_size,)
         denominator = self._compute_normalizer(emissions, mask)
         # shape: (batch_size,)
-        llh = numerator - denominator
 
-        print("reduction:", reduction)
+        print("-------------------- forward:2 --------------------")
+        print("numerator:", numerator)
+        print("denominator:", denominator)
+        llh = numerator - denominator
         print("llh:", llh)
         if reduction == 'none':
             return llh
@@ -184,6 +198,7 @@ class CRF(nn.Module):
         assert mask.shape == tags.shape
         assert mask[0].all()
 
+        print("-------------------- compute score --------------------")
         print("starts:", self.start_transitions)
         print("transitions:", self.transitions)
         print("ends:", self.end_transitions)
@@ -309,11 +324,19 @@ class CRF(nn.Module):
         assert emissions.size(2) == self.num_tags
         assert mask[0].all()
 
+        print("-------------------- viterbi decode --------------------")
+        print("starts:", self.start_transitions)
+        print("transitions:", self.transitions)
+        print("ends:", self.end_transitions)
+
+        print("emissions:", emissions)
+        print("mask:", mask)
         seq_length, batch_size = mask.shape
 
         # Start transition and first emission
         # shape: (batch_size, num_tags)
         score = self.start_transitions + emissions[0]
+        print("score:", score)
         history = []
 
         # score is a tensor of size (batch_size, num_tags) where for every batch,
@@ -328,56 +351,70 @@ class CRF(nn.Module):
             # Broadcast viterbi score for every possible next tag
             # shape: (batch_size, num_tags, 1)
             broadcast_score = score.unsqueeze(2)
+            print("broadcast_score:", broadcast_score)
 
             # Broadcast emission score for every possible current tag
             # shape: (batch_size, 1, num_tags)
             broadcast_emission = emissions[i].unsqueeze(1)
+            print("broadcast_emission:", broadcast_emission)
 
             # Compute the score tensor of size (batch_size, num_tags, num_tags) where
             # for each sample, entry at row i and column j stores the score of the best
             # tag sequence so far that ends with transitioning from tag i to tag j and emitting
             # shape: (batch_size, num_tags, num_tags)
             next_score = broadcast_score + self.transitions + broadcast_emission
+            print("next_score:", next_score)
 
             # Find the maximum score over all possible current tag
             # shape: (batch_size, num_tags)
             next_score, indices = next_score.max(dim=1)
+            print("next_score:", next_score)
+            print("indices:", indices)
 
             # Set score to the next score if this timestep is valid (mask == 1)
             # and save the index that produces the next score
             # shape: (batch_size, num_tags)
             score = torch.where(mask[i].unsqueeze(1), next_score, score)
+            print("score:", score)
             history.append(indices)
 
         # End transition score
         # shape: (batch_size, num_tags)
         score += self.end_transitions
-
+        print("score:", score)
         # Now, compute the best path for each sample
 
         # shape: (batch_size,)
         seq_ends = mask.long().sum(dim=0) - 1
+        print("seq_ends:", seq_ends)
         best_tags_list = []
 
         for idx in range(batch_size):
             # Find the tag which maximizes the score at the last timestep; this is our best tag
             # for the last timestep
             _, best_last_tag = score[idx].max(dim=0)
+            print(idx, ":best_last_tag:", best_last_tag)
             best_tags = [best_last_tag.item()]
+            print(idx, ":best_tags:", best_tags)
 
             # We trace back where the best last tag comes from, append that to our best tag
             # sequence, and trace it back again, and so on
             for hist in reversed(history[:seq_ends[idx]]):
+                print("hist:", hist)
                 best_last_tag = hist[idx][best_tags[-1]]
+                print("best_last_tag:", best_last_tag)
                 best_tags.append(best_last_tag.item())
+
 
             # Reverse the order because we start from the last timestep
             best_tags.reverse()
+            print("best_tags.reverse():", best_tags)
             best_tags_list.append(best_tags)
+            print("best_tags_list:", best_tags_list)
 
         return best_tags_list
     
-
+print("-------- test forward --------")
 num_tags = 5  # number of tags is 5
 model = CRF(num_tags)
 
@@ -388,4 +425,7 @@ emissions = torch.randn(seq_length, batch_size, num_tags)
 tags = torch.tensor([
    [0, 1], [2, 4], [3, 1]
 ], dtype=torch.long)  # (seq_length, batch_size)
-print(model(emissions, tags, reduction='token_mean'))
+print(model(emissions, tags))
+
+print("-------- test decode --------")
+print(model.decode(emissions))

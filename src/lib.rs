@@ -1,15 +1,26 @@
 use std::fmt::Display;
 
-use candle_core::{DType, Error, IndexOp, Result, Tensor, D};
+use candle_core::{shape::Dim, DType, Error, IndexOp, Result, Tensor, D};
 use candle_nn::{Init, VarBuilder};
 
+/// Reduction type
 #[derive(Debug)]
 pub enum Reduction {
+    None,
     Sum,
     Meam,
     TokenMean,
 }
 
+impl Default for Reduction {
+    fn default() -> Self {
+        Self::Sum
+    }
+}
+
+// -----------------------------------------------------------------------------
+
+///Conditional Random Field ported from [PyTorch-CRF](https://pytorch-crf.readthedocs.io/en/stable/)
 #[derive(Debug)]
 pub struct CRF {
     num_tags: usize,
@@ -22,7 +33,11 @@ pub struct CRF {
 
 impl Display for CRF {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "CRF(num_tags: {})", self.num_tags)
+        write!(
+            f,
+            "CRF(num_tags: {}, batch_first: {})",
+            self.num_tags, self.batch_first
+        )
     }
 }
 
@@ -58,11 +73,11 @@ impl CRF {
         })
     }
 
-    pub(crate) fn set_transitions(&mut self, starts: Tensor, ends: Tensor, transitions: Tensor) {
-        self.start_transitions = starts;
-        self.end_transitions = ends;
-        self.transitions = transitions;
-    }
+    // pub(crate) fn set_transitions(&mut self, starts: Tensor, ends: Tensor, transitions: Tensor) {
+    //     self.start_transitions = starts;
+    //     self.end_transitions = ends;
+    //     self.transitions = transitions;
+    // }
 
     fn validate(
         &self,
@@ -127,31 +142,31 @@ impl CRF {
         assert_eq!(mask.shape(), tags.shape());
         assert!(all(&mask.i(0)?)?);
 
-        println!("tags: {:?}", tags.to_vec2::<i64>()?);
+        // println!("tags: {:?}", tags.to_vec2::<i64>()?);
 
         let mask = mask.to_dtype(emissions.dtype())?;
 
-        println!("mask: {:?}", mask.to_vec2::<f32>()?);
+        // println!("mask: {:?}", mask.to_vec2::<f32>()?);
 
-        println!(
-            "start_transitions: {:?}",
-            self.start_transitions.to_vec1::<f32>()?
-        );
+        // println!(
+        //     "start_transitions: {:?}",
+        //     self.start_transitions.to_vec1::<f32>()?
+        // );
 
         let mut score = self.start_transitions.i(&tags.i(0)?)?;
-        println!("score: {:?}", score.to_vec1::<f32>()?);
+        // println!("score: {:?}", score.to_vec1::<f32>()?);
 
-        println!("emissions: {:?}", emissions.to_vec3::<f32>()?);
+        // println!("emissions: {:?}", emissions.to_vec3::<f32>()?);
 
         let z = multi_index(&emissions.i((0, 0..batch_size))?, &tags.i(0)?)?;
-        println!("z: {:?}", z.to_vec1::<f32>()?);
+        // println!("z: {:?}", z.to_vec1::<f32>()?);
 
         score = score.broadcast_add(&z)?;
-        println!("score: {:?}", score.to_vec1::<f32>()?);
+        // println!("score: {:?}", score.to_vec1::<f32>()?);
 
         for i in 1..seq_length {
             let z = multi_index(&self.transitions.i(&tags.i(i - 1)?)?, &tags.i(i)?)?;
-            println!("{i}, z: {:?}", z.to_vec1::<f32>()?);
+            // println!("{i}, z: {:?}", z.to_vec1::<f32>()?);
             score = score.broadcast_add(&z.broadcast_mul(&mask.i(i)?)?)?;
 
             let z = multi_index(&emissions.i((i, 0..batch_size))?, &tags.i(i)?)?;
@@ -179,56 +194,131 @@ impl CRF {
         assert_eq!(d3, self.num_tags);
         assert!(all(&mask.i(0)?)?);
 
-        println!("starts: {:?}", self.start_transitions.to_vec1::<f32>()?);
-        println!("transitions: {:?}", self.transitions.to_vec2::<f32>()?);
-        println!("ends: {:?}", self.end_transitions.to_vec1::<f32>()?);
-        println!("emissions: {:?}", emissions.to_vec3::<f32>()?);
-        println!("mask: {:?}", mask.to_vec2::<u8>()?);
+        // println!("starts: {:?}", self.start_transitions.to_vec1::<f32>()?);
+        // println!("transitions: {:?}", self.transitions.to_vec2::<f32>()?);
+        // println!("ends: {:?}", self.end_transitions.to_vec1::<f32>()?);
+        // println!("emissions: {:?}", emissions.to_vec3::<f32>()?);
+        // println!("mask: {:?}", mask.to_vec2::<u8>()?);
 
         let mut score = self.start_transitions.broadcast_add(&emissions.i(0)?)?;
-        println!("score: {:?}", score.to_vec2::<f32>()?);
+        // println!("score: {:?}", score.to_vec2::<f32>()?);
 
         for i in 1..seq_length {
             let broadcast_score = score.unsqueeze(2)?;
-            println!("broadcast_score: {:?}", broadcast_score.to_vec3::<f32>()?);
+            // println!("broadcast_score: {:?}", broadcast_score.to_vec3::<f32>()?);
             let broadcast_emissions = emissions.i(i)?.unsqueeze(1)?;
-            println!(
-                "broadcast_emissions: {:?}",
-                broadcast_emissions.to_vec3::<f32>()?
-            );
+            // println!(
+            //     "broadcast_emissions: {:?}",
+            //     broadcast_emissions.to_vec3::<f32>()?
+            // );
             let next_score = broadcast_score
                 .broadcast_add(&self.transitions)?
                 .broadcast_add(&broadcast_emissions)?;
 
-            println!("next_score: {:?}", next_score.to_vec3::<f32>()?);
+            // println!("next_score: {:?}", next_score.to_vec3::<f32>()?);
 
             let next_score = next_score.log_sum_exp(1)?;
-            println!("next_score: {:?}", next_score.to_vec2::<f32>()?);
-            println!(
-                "mask[i].unsqueeze(1): {:?}",
-                mask.i(i)?.unsqueeze(1)?.to_vec2::<u8>()
-            );
+            // println!("next_score: {:?}", next_score.to_vec2::<f32>()?);
+            // println!(
+            //     "mask[i].unsqueeze(1): {:?}",
+            //     mask.i(i)?.unsqueeze(1)?.to_vec2::<u8>()
+            // );
             let z = mask.i(i)?.unsqueeze(1)?.broadcast_as(next_score.shape())?;
             score = z.where_cond(&next_score, &score)?;
-            println!("score: {:?}", score.to_vec2::<f32>()?);
+            // println!("score: {:?}", score.to_vec2::<f32>()?);
         }
 
         score = score.broadcast_add(&self.end_transitions)?;
-        println!("score: {:?}", score.to_vec2::<f32>()?);
-        println!("result: {:?}", score.log_sum_exp(1)?.to_vec1::<f32>()?);
+        // println!("score: {:?}", score.to_vec2::<f32>()?);
+        // println!("result: {:?}", score.log_sum_exp(1)?.to_vec1::<f32>()?);
         score.log_sum_exp(1)
     }
 
-    fn viterbi_decode(&self, emissions: &Tensor, mask: &Tensor) -> Result<Vec<Vec<isize>>> {
-        unimplemented!("viterbi_decode")
+    fn viterbi_decode(&self, emissions: &Tensor, mask: &Tensor) -> Result<Vec<Vec<u32>>> {
+        let (d1, d2, d3) = emissions.dims3()?;
+        let (seq_length, batch_size) = mask.dims2()?;
+        assert_eq!(d1, seq_length);
+        assert_eq!(d2, batch_size);
+        assert_eq!(d3, self.num_tags);
+        assert!(all(&mask.i(0)?)?);
+
+        let mut score = self.start_transitions.broadcast_add(&emissions.i(0)?)?;
+        // println!("score: {:?}", score.to_vec2::<f32>()?);
+
+        let mut history = Vec::with_capacity(seq_length);
+        for i in 1..seq_length {
+            let broadcast_sore = score.unsqueeze(2)?;
+            // println!("broadcast_score: {:?}", broadcast_sore.to_vec3::<f32>()?);
+
+            let broadcast_emission = emissions.i(i)?.unsqueeze(1)?;
+            // println!(
+            //     "broadcast_emission: {:?}",
+            //     broadcast_emission.to_vec3::<f32>()?
+            // );
+
+            let next_score = broadcast_sore
+                .broadcast_add(&self.transitions)?
+                .broadcast_add(&broadcast_emission)?;
+
+            // println!("next_score: {:?}", next_score.to_vec3::<f32>()?);
+
+            let (next_score, indices) = max_indices(&next_score, 1)?;
+            // println!("next_score: {:?}", next_score.to_vec2::<f32>()?);
+            // println!("indices: {:?}", indices.to_vec2::<u32>()?);
+
+            let z = mask.i(i)?.unsqueeze(1)?.broadcast_as(next_score.shape())?;
+            score = z.where_cond(&next_score, &score)?;
+            // println!("score: {:?}", score.to_vec2::<f32>()?);
+            history.push(indices);
+        }
+
+        score = score.broadcast_add(&self.end_transitions)?;
+        // println!("score: {:?}", score.to_vec2::<f32>()?);
+
+        let seq_ends = mask
+            .to_dtype(DType::I64)?
+            .sum(0)?
+            .broadcast_sub(&Tensor::ones(1, DType::I64, mask.device())?)?;
+        // println!("seq_ends: {:?}", seq_ends.to_vec1::<i64>()?);
+
+        let mut best_tags_list = vec![];
+
+        for idx in 0..batch_size {
+            let best_last_tag = score.i(idx)?.argmax(0)?;
+            // println!(
+            //     "{idx}:best_last_tag: {:?}",
+            //     best_last_tag.to_scalar::<u32>()?
+            // );
+
+            let mut best_tags = vec![best_last_tag.to_scalar::<u32>()?];
+            // println!("{idx}:best_tags: {:?}", best_tags);
+
+            let z = seq_ends.i(idx)?.to_scalar::<i64>()? as usize;
+            let mut a = history[..z].to_vec();
+            a.reverse();
+            for hist in a.iter() {
+                // println!("hist: {:?}", hist.to_vec2::<u32>()?);
+                let last_idx = *best_tags.last().unwrap() as usize;
+                let best_last_tag = hist.i(idx)?.i(last_idx)?;
+                // println!("best_last_tag: {:?}", best_last_tag.to_scalar::<u32>()?);
+                best_tags.push(best_last_tag.to_scalar::<u32>()?);
+            }
+
+            best_tags.reverse();
+            // println!("best_tags: {:?}", best_tags);
+            best_tags_list.push(best_tags);
+        }
+
+        Ok(best_tags_list)
     }
 
-    pub fn decode(&self, emissions: &Tensor, mask: Option<&Tensor>) -> Result<Vec<Vec<isize>>> {
+    pub fn decode(&self, emissions: &Tensor, mask: Option<&Tensor>) -> Result<Vec<Vec<u32>>> {
         self.validate(emissions, None, mask)?;
         let mask = if let Some(mask) = mask {
             mask.clone()
         } else {
-            Tensor::ones(emissions.dims2()?, DType::U8, emissions.device())?
+            let (d1, d2, _) = emissions.dims3()?;
+            Tensor::ones((d1, d2), DType::U8, emissions.device())?
         };
 
         let (emissions, mask) = if self.batch_first {
@@ -244,7 +334,7 @@ impl CRF {
         emissions: &Tensor,
         tags: &Tensor,
         mask: Option<&Tensor>,
-        reduction: Option<Reduction>,
+        reduction: Reduction,
     ) -> Result<Tensor> {
         self.validate(emissions, Some(tags), mask)?;
         let mask = if let Some(mask) = mask {
@@ -269,14 +359,14 @@ impl CRF {
         let llh = numerator.broadcast_sub(&denominator)?;
 
         match reduction {
-            Some(Reduction::Sum) => llh.sum_all(),
-            Some(Reduction::Meam) => llh.mean_all(),
-            Some(Reduction::TokenMean) => {
+            Reduction::Sum => llh.sum_all(),
+            Reduction::Meam => llh.mean_all(),
+            Reduction::TokenMean => {
                 let mask = mask.to_dtype(llh.dtype())?;
                 let z = mask.sum_all()?;
                 llh.sum_all()?.broadcast_div(&z)
             }
-            None => Ok(llh),
+            Reduction::None => Ok(llh),
         }
     }
 }
@@ -301,6 +391,14 @@ fn multi_index(src: &Tensor, idx: &Tensor) -> Result<Tensor> {
 
 // -----------------------------------------------------------------------------
 
+fn max_indices<D: Dim + Copy>(x: &Tensor, dim: D) -> Result<(Tensor, Tensor)> {
+    let max = x.max(dim)?;
+    let idx = x.argmax(dim)?;
+    Ok((max, idx))
+}
+
+// -----------------------------------------------------------------------------
+
 #[cfg(test)]
 mod tests {
 
@@ -308,45 +406,45 @@ mod tests {
     use candle_core::{Device, Result};
     use candle_nn::VarMap;
 
-    fn init_data() -> Result<(CRF, Tensor, Tensor, Tensor)> {
+    fn init_data(num_tags: usize) -> Result<(CRF, Tensor, Tensor, Tensor)> {
         let device = Device::Cpu;
         let varmap = VarMap::new();
         let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
-        let num_tags = 5;
         let m = {
             let mut m = CRF::new(num_tags, false, vb.clone())?;
 
-            let starts = Tensor::new(&[-0.0579_f32, -0.0496, -0.0710, -0.0734, 0.0341], &device)?;
+            m.start_transitions =
+                Tensor::new(&[-0.0958_f32, -0.0838, -0.0998, -0.0567, 0.0658], &device)?;
 
-            let transitions = Tensor::new(
+            m.transitions = Tensor::new(
                 &[
-                    [0.0657_f32, 0.0745, 0.0158, 0.0118, 0.0006],
-                    [0.0388, 0.0191, -0.0075, -0.0740, 0.0204],
-                    [0.0116, -0.0147, -0.0462, 0.0784, -0.0037],
-                    [-0.0215, 0.0935, 0.0649, 0.0946, 0.0573],
-                    [-0.0048, -0.0320, 0.0051, 0.0460, 0.0511],
+                    [0.0186_f32, 0.0086, 0.0116, 0.0276, -0.0708],
+                    [0.0453, 0.0228, 0.0292, 0.0237, -0.0622],
+                    [0.0478, -0.0518, -0.0099, -0.0932, -0.0855],
+                    [-0.0479, 0.0702, -0.0069, 0.0862, 0.0412],
+                    [0.0668, 0.0480, 0.0736, -0.0466, 0.0364],
                 ],
                 &device,
             )?;
 
-            let ends = Tensor::new(&[-0.0785_f32, 0.0676, 0.0347, 0.0093, 0.0864], &device)?;
-            m.set_transitions(starts, ends, transitions);
+            m.end_transitions =
+                Tensor::new(&[0.0051_f32, -0.0636, -0.0887, -0.0541, -0.0946], &device)?;
             m
         };
 
         let emissions = Tensor::new(
             &[
                 [
-                    [-0.6094_f32, 0.4727, -0.2072, 0.8678, -0.3666],
-                    [-0.5847, 0.8231, 2.2543, -1.8335, -1.5335],
+                    [-1.0815_f32, -1.0964, 0.4902, -0.1495, 1.0123],
+                    [0.4571, 0.3830, 0.0305, -1.8651, -1.3217],
                 ],
                 [
-                    [0.6712, -0.6021, -0.0490, 0.8836, -0.8548],
-                    [1.1375, -0.0518, -2.1887, -0.9732, -0.0702],
+                    [-0.4570, -0.3757, -1.2726, -0.3914, 1.0987],
+                    [-2.0027, 0.8384, -1.2015, -1.9222, 1.1583],
                 ],
                 [
-                    [-0.2326, 2.0694, -1.0252, 1.3830, 0.5637],
-                    [2.7534, -0.3950, 1.4539, -0.7752, -0.7997],
+                    [1.1398, -1.4247, 1.4649, 0.5058, 0.9214],
+                    [0.1536, -1.2564, -0.6121, 0.2406, -1.0176],
                 ],
             ],
             &device,
@@ -359,7 +457,7 @@ mod tests {
 
     #[test]
     fn test_compute_score() -> Result<()> {
-        let (m, emissions, tags, mask) = init_data()?;
+        let (m, emissions, tags, mask) = init_data(5)?;
 
         let score = m.compute_score(&emissions, &tags, &mask)?;
         println!("score: {:?}", score);
@@ -368,9 +466,25 @@ mod tests {
 
     #[test]
     fn test_compute_normalizer() -> Result<()> {
-        let (m, emissions, _tags, mask) = init_data()?;
+        let (m, emissions, _tags, mask) = init_data(5)?;
         let normalizer = m.compute_normalizer(&emissions, &mask)?;
         println!("normalizer: {:?}", normalizer.to_vec1::<f32>()?);
+        Ok(())
+    }
+
+    #[test]
+    fn test_forward() -> Result<()> {
+        let (m, emissions, tags, _mask) = init_data(5)?;
+        let llh = m.forward(&emissions, &tags, None, Reduction::default())?;
+        println!("llh: {:?}", llh.to_scalar::<f32>()?);
+        Ok(())
+    }
+
+    #[test]
+    fn test_decode() -> Result<()> {
+        let (m, emissions, _tags, _mask) = init_data(5)?;
+        let tags = m.decode(&emissions, None)?;
+        println!("tags: {:?}", tags);
         Ok(())
     }
 
@@ -386,6 +500,35 @@ mod tests {
         let a = Tensor::new(&[-6.8511, -6.5189], &Device::Cpu).unwrap();
         let z = a.sum_all().unwrap();
         println!("{:?}", z.to_scalar::<f64>().unwrap());
+    }
+
+    #[test]
+    fn test_max_indices() {
+        let a = Tensor::new(
+            &[
+                [
+                    [-1.6157_f32, -1.5444, -2.4382, -1.5410, -0.1493],
+                    [-1.5919, -1.5331, -2.4236, -1.5479, -0.1437],
+                    [-0.0189, -0.0371, -0.8921, -0.0942, 1.4036],
+                    [-0.7111, -0.5118, -1.4856, -0.5114, 0.9337],
+                    [0.6879, 0.7503, -0.1210, 0.6400, 2.2131],
+                ],
+                [
+                    [-1.6227, 1.2083, -0.8286, -1.5332, 1.4490],
+                    [-1.6582, 1.1603, -0.8732, -1.5994, 1.3953],
+                    [-2.0242, 0.7173, -1.2808, -2.0847, 1.0035],
+                    [-3.9724, -1.0133, -3.1302, -3.7578, -0.7223],
+                    [-3.1918, -0.3696, -2.3839, -3.2247, -0.0612],
+                ],
+            ],
+            &Device::Cpu,
+        )
+        .unwrap();
+
+        let max = a.max(1).unwrap();
+        let max_idx = a.argmax(1).unwrap();
+        println!("{:?}", max.to_vec2::<f32>().unwrap());
+        println!("{:?}", max_idx.to_vec2::<u32>());
     }
 }
 
